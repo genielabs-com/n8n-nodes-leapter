@@ -1,0 +1,19 @@
+{
+  "node": "n8n-nodes-leapter",
+  "nodeVersion": "1.0",
+  "codexVersion": "1.0",
+  "categories": ["Miscellaneous"],
+  "resources": {
+    "primaryDocumentation": [
+      {
+        "url": "https://docs.leapter.com/integrations/n8n"
+      }
+    ],
+    "credentialDocumentation": [
+      {
+        "url": "https://docs.leapter.com/integrations/n8n#authentication"
+      }
+    ]
+  },
+  "alias": ["leapter", "blueprint", "ai workflow"]
+}
