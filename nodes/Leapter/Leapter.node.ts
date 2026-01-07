@@ -228,6 +228,13 @@ export class Leapter implements INodeType {
         default: {},
         options: [
           {
+            displayName: 'Referer',
+            name: 'referer',
+            type: 'string',
+            default: '',
+            description: 'Custom Referer header to send with the request',
+          },
+          {
             displayName: 'Timeout',
             name: 'timeout',
             type: 'number',
@@ -538,6 +545,7 @@ export class Leapter implements INodeType {
         const operation = this.getNodeParameter('operation', itemIndex) as string;
         const inputMode = this.getNodeParameter('inputMode', itemIndex) as string;
         const options = this.getNodeParameter('options', itemIndex, {}) as {
+          referer?: string;
           timeout?: number;
         };
 
@@ -591,6 +599,7 @@ export class Leapter implements INodeType {
           headers: {
             'X-Correlation-Id': executionId || '',
             'Content-Type': 'application/json',
+            ...(options.referer && { 'X-Referer': options.referer }),
           },
           body: bodyParams,
           json: true,
