@@ -9,6 +9,7 @@ Leapter is an AI application platform that enables you to build, deploy, and man
 ## Table of Contents
 
 - [Installation](#installation)
+- [Development Setup](#development-setup)
 - [Operations](#operations)
 - [Credentials](#credentials)
 - [Compatibility](#compatibility)
@@ -19,6 +20,61 @@ Leapter is an AI application platform that enables you to build, deploy, and man
 ## Installation
 
 Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
+
+## Development Setup
+
+### Prerequisites
+
+- **Node.js**: Version 20.19 - 24.x (n8n does not support Node.js 25+)
+- **pnpm**: Package manager
+
+To check your Node.js version:
+```bash
+node -v
+```
+
+If you need to switch versions using Homebrew:
+```bash
+brew install node@24
+brew unlink node
+brew link --overwrite node@24
+```
+
+### Install Dependencies
+
+```bash
+pnpm install
+```
+
+### Scripts
+
+| Script | Description |
+|--------|-------------|
+| `pnpm dev` | Start n8n with the node in development mode (with hot reload) |
+| `pnpm build` | Build the node for production |
+| `pnpm build:watch` | Build and watch for changes |
+| `pnpm lint` | Run ESLint |
+| `pnpm lint:fix` | Fix linting issues |
+| `pnpm release` | Publish a new release |
+
+### Running Locally
+
+1. Install dependencies:
+   ```bash
+   pnpm install
+   ```
+
+2. Start the development server:
+   ```bash
+   pnpm dev
+   ```
+
+3. Open n8n in your browser:
+   ```
+   http://localhost:5678
+   ```
+
+The Leapter node will be available in the n8n node picker.
 
 ## Operations
 
