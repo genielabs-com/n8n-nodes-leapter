@@ -232,7 +232,7 @@ export class Leapter implements INodeType {
             name: 'referer',
             type: 'string',
             default: '',
-            description: 'Custom Referer header to send with the request',
+            description: 'Referer value to include in request header',
           },
           {
             displayName: 'Timeout',
