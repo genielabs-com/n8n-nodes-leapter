@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       n8n-workflow:
-        specifier: '*'
+        specifier: ^2.1.0
         version: 2.1.0
     devDependencies:
       '@n8n/node-cli':
-        specifier: '*'
+        specifier: ^0.17.0
         version: 0.17.0(@typescript-eslint/utils@8.50.0(eslint@9.32.0(jiti@2.6.1))(typescript@5.9.2))(eslint@9.32.0(jiti@2.6.1))(typescript@5.9.2)
       eslint:
         specifier: 9.32.0
@@ -1997,13 +1997,13 @@ snapshots:
 
   '@clack/core@0.5.0':
     dependencies:
-      picocolors: 1.0.1
+      picocolors: 1.1.1
       sisteransi: 1.0.5
 
   '@clack/prompts@0.11.0':
     dependencies:
       '@clack/core': 0.5.0
-      picocolors: 1.0.1
+      picocolors: 1.1.1
       sisteransi: 1.0.5
 
   '@emnapi/core@1.7.1':
@@ -3154,7 +3154,7 @@ snapshots:
     dependencies:
       array-union: 2.1.0
       dir-glob: 3.0.1
-      fast-glob: 3.2.12
+      fast-glob: 3.3.3
       ignore: 5.3.2
       merge2: 1.4.1
       slash: 3.0.0
