@@ -1,5 +1,5 @@
 {
-    "name": "n8n-nodes-leapter",
+    "name": "@leapter/n8n-nodes-leapter",
     "version": "0.1.0",
     "description": "n8n community node for Leapter - execute AI blueprints and workflows dynamically via OpenAPI",
     "license": "MIT",
@@ -10,9 +10,16 @@
     "keywords": [
         "n8n-community-node-package"
     ],
+    "main": "dist/nodes/Leapter/Leapter.node.js",
     "repository": {
         "type": "git",
         "url": "https://github.com/genielabs-com/n8n-nodes-leapter.git"
+    },
+    "bugs": {
+        "url": "https://github.com/genielabs-com/n8n-nodes-leapter/issues"
+    },
+    "engines": {
+        "node": ">=18.0.0"
     },
    "scripts": {
 		"build": "n8n-node build",

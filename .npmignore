@@ -1,0 +1,22 @@
+# Source files (dist/ contains compiled output)
+nodes/**/*.ts
+credentials/**/*.ts
+
+# Development
+.github/
+.vscode/
+*.log
+
+# Config files not needed in package
+tsconfig.json
+.eslintrc.*
+.prettierrc
+.editorconfig
+CLAUDE.md
+
+# Git
+.git/
+.gitignore
+
+# Misc
+*.tgz
