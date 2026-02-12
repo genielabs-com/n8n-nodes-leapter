@@ -14,7 +14,7 @@ import type {
 export class LeapterApi implements ICredentialType {
   name = 'leapterApi';
   displayName = 'Leapter API';
-  documentationUrl = 'https://docs.leapter.com/integrations/n8n';
+  documentationUrl = 'https://github.com/genielabs-com/n8n-nodes-leapter#readme';
   icon = 'file:leapter.svg' as const;
 
   properties: INodeProperties[] = [
