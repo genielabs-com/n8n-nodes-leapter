@@ -1,7 +1,7 @@
-// eslint-disable-next-line @n8n/community-nodes/no-restricted-imports
-import { DynamicStructuredTool } from '@langchain/core/tools';
 import type {
+	IExecuteFunctions,
 	ILoadOptionsFunctions,
+	INodeExecutionData,
 	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
@@ -9,7 +9,7 @@ import type {
 	SupplyData,
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
-import { z } from 'zod';
+import type { ZodTypeAny } from 'zod';
 
 import {
 	CREDENTIAL_TYPE,
@@ -20,94 +20,6 @@ import {
 	deduplicateToolNames,
 } from './utils';
 import type { OpenAPISpec } from './utils';
-
-/**
- * Creates a DynamicStructuredTool for a single blueprint.
- * Isolated into its own function to prevent TypeScript deep type instantiation
- * errors caused by DynamicStructuredTool's complex generics with dynamic Zod schemas.
- */
-function createTool(opts: {
-	name: string;
-	description: string;
-	schema: z.ZodObject<z.ZodRawShape>;
-	editorBaseUrl: string;
-	path: string;
-	operationUrl: string;
-	hasSchema: boolean;
-	helpers: ISupplyDataFunctions['helpers'];
-	context: ISupplyDataFunctions;
-	nodeName: string;
-	executionId: string;
-}): DynamicStructuredTool {
-	// @ts-expect-error DynamicStructuredTool generics cause deep type instantiation with dynamic Zod schemas
-	return new DynamicStructuredTool({
-		name: opts.name,
-		description: opts.description,
-		schema: opts.schema,
-		func: async (toolArgs: Record<string, unknown>): Promise<string> => {
-			try {
-				const body = opts.hasSchema ? toolArgs : {};
-
-				const response = (await opts.helpers.httpRequestWithAuthentication.call(
-					opts.context,
-					CREDENTIAL_TYPE,
-					{
-						method: 'POST',
-						url: opts.operationUrl,
-						headers: {
-							'X-Correlation-Id': opts.executionId,
-							'Content-Type': 'application/json',
-						},
-						body,
-						json: true,
-						returnFullResponse: true,
-						ignoreHttpStatusErrors: true,
-					},
-				)) as {
-					body: unknown;
-					headers: Record<string, string>;
-					statusCode: number;
-				};
-
-				const statusCode = response.statusCode || 200;
-				const responseBody = response.body;
-
-				if (statusCode >= 400) {
-					const errorBody =
-						typeof responseBody === 'object' && responseBody !== null
-							? responseBody
-							: {};
-					const errorMessage =
-						(errorBody as Record<string, string>).detail ||
-						(errorBody as Record<string, string>).error ||
-						(errorBody as Record<string, string>).message ||
-						`Request failed with status ${statusCode}`;
-					return JSON.stringify({ error: errorMessage, statusCode });
-				}
-
-				const runId = response.headers['x-run-id'] || response.headers['X-Run-Id'];
-				const modelIdMatch = opts.path.match(/\/models\/([^/]+)\/runs/);
-				const modelId = modelIdMatch?.[1];
-				const editorLink = modelId
-					? `${opts.editorBaseUrl}/${modelId}`
-					: opts.editorBaseUrl;
-
-				return JSON.stringify({
-					...(typeof responseBody === 'object' ? responseBody : { result: responseBody }),
-					_metadata: { runId, editorLink },
-				});
-			} catch (error) {
-				const err = error as Error;
-				return JSON.stringify({
-					error: `Blueprint execution failed: ${err.message}`,
-				});
-			}
-		},
-		metadata: {
-			sourceNodeName: opts.nodeName,
-		},
-	});
-}
 
 export class LeapterTool implements INodeType {
 	description: INodeTypeDescription = {
@@ -169,7 +81,8 @@ export class LeapterTool implements INodeType {
 				},
 				default: [],
 				noDataExpression: true,
-				description: 'Select specific blueprints to expose as tools. Leave empty to expose all blueprints in the project. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				description:
+					'Select specific blueprints to expose as tools. Leave empty to expose all blueprints in the project. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 			},
 
 			// 3. Tool Description Prefix (optional)
@@ -197,7 +110,190 @@ export class LeapterTool implements INodeType {
 		},
 	};
 
+	/**
+	 * Called by n8n when the AI Agent invokes the tool.
+	 * Receives { blueprint, parameters } from the LLM, resolves the blueprint
+	 * to an operation URL via the OpenAPI spec, and executes the HTTP call.
+	 */
+	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+		const items = this.getInputData();
+		const returnData: INodeExecutionData[] = [];
+
+		const executionId = this.getExecutionId() || '';
+
+		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+			try {
+				const input = items[itemIndex].json;
+				const blueprintName = input.blueprint as string | undefined;
+
+				if (!blueprintName) {
+					throw new NodeOperationError(
+						this.getNode(),
+						'Missing "blueprint" in tool input. The AI model must specify which blueprint to execute.',
+						{ itemIndex },
+					);
+				}
+
+				const parameters: Record<string, unknown> =
+					typeof input.parameters === 'object' && input.parameters !== null
+						? (input.parameters as Record<string, unknown>)
+						: {};
+
+				// Parse project compound value: projectId::specUrl::editorBaseUrl::projectName
+				const projectValue = this.getNodeParameter('project', itemIndex) as string;
+				const projectParts = projectValue.split('::');
+				const specUrl = projectParts[1];
+				const editorBaseUrl = projectParts[2];
+
+				if (!specUrl || !specUrl.startsWith('http')) {
+					throw new NodeOperationError(
+						this.getNode(),
+						`Invalid project configuration. Cannot parse spec URL from: "${projectValue}"`,
+						{ itemIndex },
+					);
+				}
+
+				// Fetch OpenAPI spec to resolve blueprint name → operation URL
+				const spec = (await this.helpers.httpRequestWithAuthentication.call(
+					this,
+					CREDENTIAL_TYPE,
+					{
+						method: 'GET',
+						url: specUrl,
+						json: true,
+					},
+				)) as OpenAPISpec;
+
+				const serverUrl = (spec.servers?.[0]?.url || '').replace(/\/$/, '');
+
+				if (!serverUrl.startsWith('http')) {
+					throw new NodeOperationError(
+						this.getNode(),
+						`OpenAPI spec server URL is not absolute: "${spec.servers?.[0]?.url}"`,
+						{ itemIndex },
+					);
+				}
+
+				// Find the matching blueprint by sanitized name
+				let operationUrl: string | undefined;
+				let matchedPath: string | undefined;
+				const availableNames: string[] = [];
+
+				for (const [path, pathItem] of Object.entries(spec.paths)) {
+					const operation = pathItem.post;
+					if (!operation || operation.deprecated) continue;
+
+					const name =
+						operation.summary || operation.operationId || path.replace(/\//g, '_');
+					const sanitized = sanitizeToolName(name);
+					availableNames.push(sanitized);
+
+					if (sanitized === blueprintName) {
+						operationUrl = `${serverUrl}${path}`;
+						matchedPath = path;
+						break;
+					}
+				}
+
+				if (!operationUrl) {
+					throw new NodeOperationError(
+						this.getNode(),
+						`Blueprint "${blueprintName}" not found. Available: ${availableNames.join(', ')}`,
+						{ itemIndex },
+					);
+				}
+
+				// Execute the blueprint
+				const response = (await this.helpers.httpRequestWithAuthentication.call(
+					this,
+					CREDENTIAL_TYPE,
+					{
+						method: 'POST',
+						url: operationUrl,
+						headers: {
+							'X-Correlation-Id': executionId,
+							'Content-Type': 'application/json',
+						},
+						body: parameters,
+						json: true,
+						returnFullResponse: true,
+						ignoreHttpStatusErrors: true,
+					},
+				)) as {
+					body: unknown;
+					headers: Record<string, string>;
+					statusCode: number;
+				};
+
+				const statusCode = response.statusCode || 200;
+				const responseBody = response.body;
+
+				if (statusCode >= 400) {
+					const errorBody =
+						typeof responseBody === 'object' && responseBody !== null
+							? responseBody
+							: {};
+					const errorMessage =
+						(errorBody as Record<string, string>).detail ||
+						(errorBody as Record<string, string>).error ||
+						(errorBody as Record<string, string>).message ||
+						`Request failed with status ${statusCode}`;
+
+					returnData.push({
+						json: { error: errorMessage, statusCode },
+						pairedItem: { item: itemIndex },
+					});
+					continue;
+				}
+
+				// Extract metadata
+				const runId = response.headers['x-run-id'] || response.headers['X-Run-Id'];
+				const modelIdMatch = matchedPath?.match(/\/models\/([^/]+)\/runs/);
+				const modelId = modelIdMatch?.[1];
+				const editorLink =
+					modelId && editorBaseUrl && editorBaseUrl !== 'undefined'
+						? `${editorBaseUrl}/${modelId}`
+						: '';
+
+				const resultObj =
+					typeof responseBody === 'object' && responseBody !== null
+						? (responseBody as Record<string, unknown>)
+						: { result: responseBody };
+
+				returnData.push({
+					json: {
+						...resultObj,
+						_metadata: { runId, editorLink },
+					},
+					pairedItem: { item: itemIndex },
+				});
+			} catch (error) {
+				if (error instanceof NodeOperationError) throw error;
+				const err = error as Error;
+				throw new NodeOperationError(
+					this.getNode(),
+					`Blueprint execution failed: ${err.message}`,
+					{ itemIndex },
+				);
+			}
+		}
+
+		return [returnData];
+	}
+
+	/**
+	 * Provides a single tool to the AI Agent that can execute any blueprint.
+	 * The tool schema has a "blueprint" enum (listing available blueprints)
+	 * and a "parameters" object for the blueprint's input data.
+	 * When the LLM calls this tool, n8n invokes execute() with the arguments.
+	 */
 	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
+		// Lazy imports: @langchain/core and zod are provided by n8n at runtime
+		// but not resolvable at module load time in dev mode
+		// eslint-disable-next-line @n8n/community-nodes/no-restricted-imports
+		const { DynamicStructuredTool } = await import('@langchain/core/tools');
+		const { z } = await import('zod');
+
 		const projectValue = this.getNodeParameter('project', itemIndex) as string;
 
 		if (!projectValue) {
@@ -217,7 +313,16 @@ export class LeapterTool implements INodeType {
 		) as string;
 
 		// Parse project compound value: projectId::specUrl::editorBaseUrl::projectName
-		const [, specUrl, editorBaseUrl] = projectValue.split('::');
+		const projectParts = projectValue.split('::');
+		const specUrl = projectParts[1];
+		const projectName = projectParts[3] || 'leapter';
+
+		if (!specUrl || !specUrl.startsWith('http')) {
+			throw new NodeOperationError(
+				this.getNode(),
+				`Invalid project value. Expected compound format but got: "${projectValue}" (parsed specUrl: "${specUrl}")`,
+			);
+		}
 
 		// Fetch OpenAPI spec
 		const spec = (await this.helpers.httpRequestWithAuthentication.call(
@@ -241,35 +346,38 @@ export class LeapterTool implements INodeType {
 			);
 		}
 
-		const serverUrl = spec.servers[0].url.replace(/\/$/, '');
+		const rawServerUrl = spec.servers[0].url;
+		const serverUrl = rawServerUrl.replace(/\/$/, '');
 
-		// Parse the filter values into a Set of compound values for fast lookup
-		const filterArray = Array.isArray(blueprintFilter) ? blueprintFilter : [];
-		// Extract paths from the compound values for filtering
+		if (!serverUrl.startsWith('http://') && !serverUrl.startsWith('https://')) {
+			throw new NodeOperationError(
+				this.getNode(),
+				`OpenAPI spec server URL must be absolute, got: "${rawServerUrl}". ` +
+					'The spec.servers[0].url must include the protocol and host.',
+			);
+		}
+
+		const filterArray: string[] = Array.isArray(blueprintFilter) ? blueprintFilter : [];
 		const filterPaths = new Set(
 			filterArray.map((v) => {
-				// compound value: post::path::operationUrl::editorBaseUrl::blueprintName
 				const [, filterPath] = v.split('::');
 				return filterPath;
 			}),
 		);
 		const hasFilter = filterPaths.size > 0;
 
-		// Build one tool per POST blueprint
+		// Collect blueprint entries
 		const toolNames: string[] = [];
 		const toolEntries: Array<{
 			name: string;
-			path: string;
-			operationUrl: string;
 			description: string;
-			schema: Record<string, z.ZodTypeAny>;
+			schema: Record<string, ZodTypeAny>;
 		}> = [];
 
 		for (const [path, pathItem] of Object.entries(spec.paths)) {
 			const operation = pathItem.post;
 			if (!operation || operation.deprecated) continue;
 
-			// Apply blueprint filter
 			if (hasFilter && !filterPaths.has(path)) continue;
 
 			const blueprintName =
@@ -277,17 +385,11 @@ export class LeapterTool implements INodeType {
 			const toolName = sanitizeToolName(blueprintName);
 			toolNames.push(toolName);
 
-			const operationUrl = `${serverUrl}${path}`;
-			const description = [toolDescriptionPrefix, operation.description || operation.summary || blueprintName]
-				.filter(Boolean)
-				.join(' - ');
-
+			const description = operation.description || operation.summary || blueprintName;
 			const zodShape = buildZodSchemaFromOperation(operation, spec);
 
 			toolEntries.push({
 				name: toolName,
-				path,
-				operationUrl,
 				description,
 				schema: zodShape,
 			});
@@ -303,35 +405,54 @@ export class LeapterTool implements INodeType {
 		// Deduplicate tool names
 		const uniqueNames = deduplicateToolNames(toolNames);
 
-		// Capture references for use inside tool func closures
-		const helpers = this.helpers;
-		const nodeName = this.getNode().name;
-		const executionId = this.getExecutionId() || '';
+		// Build per-blueprint parameter descriptions for the LLM
+		const blueprintDescriptions = toolEntries
+			.map((entry, i) => {
+				const paramKeys = Object.keys(entry.schema);
+				const paramStr =
+					paramKeys.length > 0
+						? `Parameters: { ${paramKeys.join(', ')} }`
+						: 'No parameters required';
+				return `- "${uniqueNames[i]}": ${entry.description}. ${paramStr}`;
+			})
+			.join('\n');
 
-		// Create DynamicStructuredTool instances
-		// DynamicStructuredTool generics cause deep type instantiation with dynamic schemas,
-		// so we construct tools via a helper that isolates the type complexity.
-		const tools = toolEntries.map((entry, i) => {
-			const hasSchema = Object.keys(entry.schema).length > 0;
-			const zodObject = hasSchema
-				? z.object(entry.schema)
-				: z.object({ input: z.string().optional().describe('Optional input') });
+		const toolDescription = [
+			toolDescriptionPrefix,
+			`Execute Leapter blueprints from the "${projectName}" project.`,
+			'',
+			'Available blueprints:',
+			blueprintDescriptions,
+			'',
+			'Set "blueprint" to the blueprint name and "parameters" to its input values.',
+		]
+			.filter((line) => line !== undefined)
+			.join('\n');
 
-			return createTool({
-				name: uniqueNames[i],
-				description: entry.description,
-				schema: zodObject,
-				editorBaseUrl,
-				path: entry.path,
-				operationUrl: entry.operationUrl,
-				hasSchema,
-				helpers,
-				context: this,
-				nodeName,
-				executionId,
-			});
+		// Create a single tool with blueprint selector
+		const tool = new DynamicStructuredTool({
+			name: sanitizeToolName(`leapter_${projectName}`),
+			description: toolDescription,
+			schema: z.object({
+				blueprint: z
+					.enum(uniqueNames as [string, ...string[]])
+					.describe('The name of the blueprint to execute'),
+				parameters: z
+					.record(z.any())
+					.optional()
+					.describe('Key-value parameters for the selected blueprint'),
+			}) as any,
+			// func is required by DynamicStructuredTool but n8n calls execute() instead
+			func: async (): Promise<string> => {
+				return JSON.stringify({
+					error: 'Unexpected: func should not be called directly',
+				});
+			},
+			metadata: {
+				sourceNodeName: this.getNode().name,
+			},
 		});
 
-		return { response: tools };
+		return { response: tool };
 	}
 }

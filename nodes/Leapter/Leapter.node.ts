@@ -31,7 +31,6 @@ export class Leapter implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["operation"]?.split("::")[4] || ""}}',
 		description: 'Execute Leapter blueprint operations dynamically',
-		usableAsTool: true,
 		defaults: {
 			name: 'Leapter',
 		},
