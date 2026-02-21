@@ -403,3 +403,41 @@ export function buildZodSchemaFromOperation(
 
 	return zodShape;
 }
+
+/**
+ * Build a human-readable parameter summary from an OpenAPI operation's request body.
+ * Used in tool descriptions to help the LLM understand what each tool expects.
+ */
+export function describeOperationParams(
+	operation: Operation,
+	spec: OpenAPISpec,
+): string {
+	const jsonContent = operation.requestBody?.content?.['application/json'];
+	if (!jsonContent?.schema) return '';
+
+	const schema = resolveSchema(jsonContent.schema, spec);
+	const properties = schema.properties || {};
+	const required = schema.required || [];
+
+	if (Object.keys(properties).length === 0) return '';
+
+	const lines: string[] = [];
+	for (const [name, propSchema] of Object.entries(properties)) {
+		const resolved = resolveSchema(propSchema, spec);
+		const isRequired = required.includes(name);
+		const type = resolved.type || 'string';
+		const parts: string[] = [`${name} (${type}, ${isRequired ? 'required' : 'optional'})`];
+
+		if (resolved.description) {
+			parts.push(`: ${resolved.description}`);
+		}
+
+		if (resolved.enum && resolved.enum.length > 0) {
+			parts.push(` [${resolved.enum.join(', ')}]`);
+		}
+
+		lines.push(parts.join(''));
+	}
+
+	return 'Parameters:\n' + lines.map((l) => `  - ${l}`).join('\n');
+}

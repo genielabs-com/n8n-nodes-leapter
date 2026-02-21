@@ -16,6 +16,7 @@ import {
 	fetchProjects,
 	fetchOperations,
 	buildZodSchemaFromOperation,
+	describeOperationParams,
 	sanitizeToolName,
 	deduplicateToolNames,
 } from './utils';
@@ -432,12 +433,14 @@ export class LeapterTool implements INodeType {
 			const toolName = sanitizeToolName(blueprintName);
 			toolNames.push(toolName);
 
+			const paramDescription = describeOperationParams(operation, spec);
 			const description = [
 				toolDescriptionPrefix,
 				operation.description || operation.summary || blueprintName,
+				paramDescription,
 			]
 				.filter(Boolean)
-				.join(' - ');
+				.join('\n');
 
 			const zodShape = buildZodSchemaFromOperation(operation, spec);
 
