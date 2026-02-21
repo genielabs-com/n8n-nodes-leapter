@@ -105,6 +105,24 @@ export class LeapterTool implements INodeType {
 					'Optional text prepended to each tool description. Use this to give the AI extra context about when to use these tools.',
 				placeholder: 'e.g. "Use this tool for the Acme project to..."',
 			},
+
+			// 4. Options
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				options: [
+					{
+						displayName: 'Timeout',
+						name: 'timeout',
+						type: 'number',
+						default: 30000,
+						description: 'Request timeout in milliseconds',
+					},
+				],
+			},
 		],
 	};
 
@@ -135,6 +153,9 @@ export class LeapterTool implements INodeType {
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
 				const input = items[itemIndex].json;
+				const options = this.getNodeParameter('options', itemIndex, {}) as {
+					timeout?: number;
+				};
 
 				// Extract action field for tool-name routing before filtering
 				const action = typeof input.action === 'string' ? input.action : '';
@@ -285,6 +306,7 @@ export class LeapterTool implements INodeType {
 						json: true,
 						returnFullResponse: true,
 						ignoreHttpStatusErrors: true,
+						...(options.timeout ? { timeout: options.timeout } : {}),
 					},
 				)) as {
 					body: unknown;
@@ -335,8 +357,15 @@ export class LeapterTool implements INodeType {
 					pairedItem: { item: itemIndex },
 				});
 			} catch (error) {
-				if (error instanceof NodeOperationError) throw error;
 				const err = error as Error;
+				if (this.continueOnFail()) {
+					returnData.push({
+						json: { error: err.message },
+						pairedItem: { item: itemIndex },
+					});
+					continue;
+				}
+				if (error instanceof NodeOperationError) throw error;
 				throw new NodeOperationError(
 					this.getNode(),
 					`Blueprint execution failed: ${err.message}`,
