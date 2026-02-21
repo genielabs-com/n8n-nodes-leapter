@@ -37,6 +37,7 @@ function createTool(opts: {
 	helpers: ISupplyDataFunctions['helpers'];
 	context: ISupplyDataFunctions;
 	nodeName: string;
+	executionId: string;
 }): DynamicStructuredTool {
 	// @ts-expect-error DynamicStructuredTool generics cause deep type instantiation with dynamic Zod schemas
 	return new DynamicStructuredTool({
@@ -54,6 +55,7 @@ function createTool(opts: {
 						method: 'POST',
 						url: opts.operationUrl,
 						headers: {
+							'X-Correlation-Id': opts.executionId,
 							'Content-Type': 'application/json',
 						},
 						body,
@@ -181,7 +183,6 @@ export class LeapterTool implements INodeType {
 				placeholder: 'e.g. "Use this tool for the Acme project to..."',
 			},
 		],
-		usableAsTool: true,
 	};
 
 	methods = {
@@ -305,6 +306,7 @@ export class LeapterTool implements INodeType {
 		// Capture references for use inside tool func closures
 		const helpers = this.helpers;
 		const nodeName = this.getNode().name;
+		const executionId = this.getExecutionId() || '';
 
 		// Create DynamicStructuredTool instances
 		// DynamicStructuredTool generics cause deep type instantiation with dynamic schemas,
@@ -326,6 +328,7 @@ export class LeapterTool implements INodeType {
 				helpers,
 				context: this,
 				nodeName,
+				executionId,
 			});
 		});
 
