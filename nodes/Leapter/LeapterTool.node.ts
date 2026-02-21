@@ -17,6 +17,7 @@ import {
 	fetchOperations,
 	buildZodSchemaFromOperation,
 	describeOperationParams,
+	resolveSchema,
 	sanitizeToolName,
 	deduplicateToolNames,
 } from './utils';
@@ -121,9 +122,9 @@ export class LeapterTool implements INodeType {
 
 	/**
 	 * Called by n8n when the AI Agent invokes a tool.
-	 * n8n passes the tool arguments but NOT the tool name, so we match
-	 * the input argument keys against blueprint schemas to identify
-	 * which blueprint to execute.
+	 * Routes to the correct blueprint using:
+	 * 1. The action field (tool name) if available
+	 * 2. Schema-key matching as fallback
 	 */
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
@@ -134,6 +135,9 @@ export class LeapterTool implements INodeType {
 		for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
 			try {
 				const input = items[itemIndex].json;
+
+				// Extract action field for tool-name routing before filtering
+				const action = typeof input.action === 'string' ? input.action : '';
 
 				// Extract tool arguments (filter out n8n system fields)
 				const toolArgs: Record<string, unknown> = {};
@@ -197,10 +201,14 @@ export class LeapterTool implements INodeType {
 					const requestBody = operation.requestBody;
 					if (requestBody) {
 						const content = requestBody.content?.['application/json'];
-						const schema = content?.schema;
-						if (schema?.properties) {
-							for (const key of Object.keys(schema.properties)) {
-								schemaKeys.add(key);
+						const rawSchema = content?.schema;
+						if (rawSchema) {
+							// Resolve $ref to get actual properties
+							const resolvedSchema = resolveSchema(rawSchema, spec);
+							if (resolvedSchema?.properties) {
+								for (const key of Object.keys(resolvedSchema.properties)) {
+									schemaKeys.add(key);
+								}
 							}
 						}
 					}
@@ -213,32 +221,42 @@ export class LeapterTool implements INodeType {
 					});
 				}
 
-				// Match input arguments to a blueprint by schema keys
-				const inputKeys = new Set(Object.keys(toolArgs));
-				let matched = blueprints[0]; // Default to first if only one exists
-				let bestScore = -1;
+				// Route to the correct blueprint
+				let matched: (typeof blueprints)[0] | undefined;
 
-				if (blueprints.length > 1) {
-					for (const bp of blueprints) {
-						if (bp.schemaKeys.size === 0) continue;
+				// Strategy 1: Match by action field (tool name)
+				if (action) {
+					const actionSanitized = sanitizeToolName(action);
+					matched = blueprints.find((bp) => bp.name === actionSanitized);
+				}
 
-						// Score: how many input keys match the blueprint's schema keys
-						let score = 0;
-						for (const key of inputKeys) {
-							if (bp.schemaKeys.has(key)) score++;
-						}
+				// Strategy 2: Schema-key matching fallback
+				if (!matched) {
+					if (blueprints.length === 1) {
+						matched = blueprints[0];
+					} else if (blueprints.length > 1) {
+						const inputKeys = new Set(Object.keys(toolArgs));
+						let bestScore = -1;
 
-						// Penalize blueprints that have many unmatched required keys
-						const coverage = bp.schemaKeys.size > 0
-							? score / bp.schemaKeys.size
-							: 0;
+						for (const bp of blueprints) {
+							if (bp.schemaKeys.size === 0) continue;
 
-						// Prefer blueprints where input keys match most of the schema
-						const weightedScore = score + coverage;
+							// Score: how many input keys match the blueprint's schema keys
+							let score = 0;
+							for (const key of inputKeys) {
+								if (bp.schemaKeys.has(key)) score++;
+							}
 
-						if (weightedScore > bestScore) {
-							bestScore = weightedScore;
-							matched = bp;
+							// Coverage: what fraction of blueprint schema is matched
+							const coverage = score / bp.schemaKeys.size;
+
+							// Prefer blueprints where input keys match most of the schema
+							const weightedScore = score + coverage;
+
+							if (weightedScore > bestScore) {
+								bestScore = weightedScore;
+								matched = bp;
+							}
 						}
 					}
 				}
